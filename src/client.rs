@@ -3,17 +3,17 @@ use std::error::Error;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
-struct Item {
+pub struct Item {
     by: Option<String>,
     descendants: Option<i32>,
     id: i32,
     kids: Option<Vec<i32>>,
     score: Option<i32>,
     time: i32,
-    title: Option<String>,
+    pub title: Option<String>,
     r#type: String,
-    url: Option<String>,
-    text: Option<String>,
+    pub url: Option<String>,
+    pub text: Option<String>,
 }
 
 fn print_kid(id: &i32, tab: i32) {
@@ -30,13 +30,13 @@ fn print_kid(id: &i32, tab: i32) {
     }
 }
 
-fn fetch_item(id: &i32) -> Result<Item, Box<dyn Error>> {
+pub fn fetch_item(id: &i32) -> Result<Item, Box<dyn Error>> {
     let url = format!("https://hacker-news.firebaseio.com/v0/item/{}.json", id);
     let response = reqwest::blocking::get(url)?.json::<Item>()?;
     Ok(response)
 }
 
-fn fetch_top_stories(amount: usize) -> Result<Vec<Item>, Box<dyn Error>> {
+pub fn fetch_top_stories(amount: usize) -> Result<Vec<Item>, Box<dyn Error>> {
     let url = "https://hacker-news.firebaseio.com/v0/topstories.json";
     let response: Vec<i32> = reqwest::blocking::get(url)?.json::<Vec<i32>>()?;
 

@@ -4,13 +4,17 @@ use std::{
 };
 
 use crossterm::{
-    cursor::MoveTo,
+    cursor::{self, MoveTo},
     event::{self, Event, KeyCode},
     style::{self, Stylize},
-    terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
+    terminal::{self, disable_raw_mode, enable_raw_mode, Clear, ClearType},
     QueueableCommand,
 };
 use nom::{bytes::complete::take_while1, character::complete::space0, IResult};
+
+use crate::client::{fetch_item, fetch_top_stories};
+
+const MAX_TITLE_WIDTH: usize = 120;
 
 #[derive(Default)]
 pub struct Terminal {
@@ -111,7 +115,21 @@ impl Terminal {
 
         match command {
             Command::Top(count) => {
-                stdout.queue(style::Print(format!("Printing top {count}")))?;
+                let stories = fetch_top_stories(count).unwrap();
+                let (width, _) = terminal::size().unwrap();
+                let (_, mut height) = cursor::position().unwrap();
+                let new_cursor_pos = width as usize / 2 - (MAX_TITLE_WIDTH / 2);
+                stdout.queue(MoveTo(new_cursor_pos as u16, height))?;
+                for story in stories {
+                    stdout.queue(style::PrintStyledContent(story.title.unwrap().yellow()))?;
+                    height += 1;
+                    stdout.queue(MoveTo(new_cursor_pos as u16, height))?;
+                    stdout.queue(style::PrintStyledContent(
+                        story.url.unwrap().blue().underlined(),
+                    ))?;
+                    height += 2;
+                    stdout.queue(MoveTo(new_cursor_pos as u16, height))?;
+                }
             }
             Command::New(count) => {
                 stdout.queue(style::Print(format!("Printing new {count}")))?;
