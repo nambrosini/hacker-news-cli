@@ -1,6 +1,9 @@
 use std::error::Error;
 
 use serde::Deserialize;
+use tokio::task::JoinSet;
+
+const BASE_URL: &str = "https://hacker-news.firebaseio.com/v0";
 
 #[derive(Debug, Deserialize)]
 pub struct Item {
@@ -16,35 +19,66 @@ pub struct Item {
     pub text: Option<String>,
 }
 
-fn print_kid(id: &i32, tab: i32) {
-    let item = fetch_item(id).unwrap();
-    let mut tabs = String::new();
-    for _ in 0..tab {
-        tabs.push('\t');
-    }
-    println!("{}", item.text.unwrap());
-    if let Some(kids) = item.kids {
-        for k in kids {
-            print_kid(&k, tab + 1);
-        }
-    }
+//fn print_kid(id: &i32, tab: i32) {
+//    let item = fetch_item(id).unwrap();
+//    let mut tabs = String::new();
+//    for _ in 0..tab {
+//        tabs.push('\t');
+//    }
+//    println!("{}", item.text.unwrap());
+//    if let Some(kids) = item.kids {
+//        for k in kids {
+//            print_kid(&k, tab + 1);
+//        }
+//    }
+//}
+
+pub async fn fetch_item(id: i32) -> Result<Item, reqwest::Error> {
+    let url = format!("{}/item/{}.json", BASE_URL, id);
+    let response = reqwest::get(url).await?;
+    let data = response.json::<Item>().await?;
+    Ok(data)
 }
 
-pub fn fetch_item(id: &i32) -> Result<Item, Box<dyn Error>> {
-    let url = format!("https://hacker-news.firebaseio.com/v0/item/{}.json", id);
-    let response = reqwest::blocking::get(url)?.json::<Item>()?;
-    Ok(response)
+pub async fn fetch_best(amount: usize) -> Result<Vec<Item>, Box<dyn Error>> {
+    let url = format!("{}/topstories.json", BASE_URL);
+    fetch_stories(&url, amount).await
 }
 
-pub fn fetch_top_stories(amount: usize) -> Result<Vec<Item>, Box<dyn Error>> {
-    let url = "https://hacker-news.firebaseio.com/v0/topstories.json";
-    let response: Vec<i32> = reqwest::blocking::get(url)?.json::<Vec<i32>>()?;
+pub async fn fetch_new(amount: usize) -> Result<Vec<Item>, Box<dyn Error>> {
+    let url = format!("{}/newstories.json", BASE_URL);
+    fetch_stories(&url, amount).await
+}
 
-    let mut items = Vec::new();
+pub async fn fetch_show(amount: usize) -> Result<Vec<Item>, Box<dyn Error>> {
+    let url = format!("{}/showstories.json", BASE_URL);
+    fetch_stories(&url, amount).await
+}
 
-    for id in response.iter().take(amount) {
-        let item = fetch_item(id)?;
-        items.push(item);
+pub async fn fetch_ask(amount: usize) -> Result<Vec<Item>, Box<dyn Error>> {
+    let url = format!("{}/askstories.json", BASE_URL);
+    fetch_stories(&url, amount).await
+}
+
+pub async fn fetch_jobs(amount: usize) -> Result<Vec<Item>, Box<dyn Error>> {
+    let url = format!("{}/jobstories.json", BASE_URL);
+    fetch_stories(&url, amount).await
+}
+
+async fn fetch_stories(url: &str, amount: usize) -> Result<Vec<Item>, Box<dyn Error>> {
+    let response: Vec<i32> = reqwest::get(url).await?.json::<Vec<i32>>().await?;
+
+    let mut items: Vec<Item> = Vec::new();
+    let mut set = JoinSet::new();
+
+    let response: Vec<i32> = response.into_iter().take(amount).collect();
+
+    for id in response {
+        set.spawn(fetch_item(id));
+    }
+
+    while let Some(res) = set.join_next().await {
+        items.push(res??);
     }
 
     Ok(items)

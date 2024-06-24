@@ -2,6 +2,7 @@
 
 use hacker_news_cli::terminal::Terminal;
 
-fn main() {
-    Terminal::default().run();
+#[tokio::main]
+async fn main() {
+    Terminal::default().run().await;
 }

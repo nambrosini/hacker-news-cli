@@ -1,7 +1,6 @@
-use std::{
-    fmt::write,
-    io::{self, stdout, Write},
-};
+mod command;
+
+use std::io::{self, stdout, Write};
 
 use crossterm::{
     cursor::{self, MoveTo},
@@ -10,48 +9,51 @@ use crossterm::{
     terminal::{self, disable_raw_mode, enable_raw_mode, Clear, ClearType},
     QueueableCommand,
 };
-use nom::{bytes::complete::take_while1, character::complete::space0, IResult};
 
-use crate::client::{fetch_item, fetch_top_stories};
+use crate::client::{fetch_ask, fetch_best, fetch_jobs, fetch_new, fetch_show, Item};
+
+use crate::terminal::command::Command;
 
 const MAX_TITLE_WIDTH: usize = 120;
 
 #[derive(Default)]
 pub struct Terminal {
     should_quit: bool,
+    is_command: bool,
+    last_line: u16,
+    is_dashboard_active: bool,
 }
 
 impl Terminal {
-    pub fn run(&mut self) {
-        Self::initialize().unwrap();
-        let result = self.repl();
+    pub async fn run(&mut self) {
+        self.initialize().unwrap();
+        let result = self.repl().await;
         Self::terminate().unwrap();
         stdout().flush().unwrap();
         result.unwrap();
     }
 
-    fn initialize() -> Result<(), std::io::Error> {
+    fn initialize(&mut self) -> Result<(), std::io::Error> {
         let mut stdout = io::stdout();
         enable_raw_mode()?;
         Self::clear_screen()?;
-        stdout.queue(MoveTo(0, 0))?;
-        Self::print_prompt()?;
+        self.show_dashboard()?;
         stdout.flush()
     }
 
     fn terminate() -> Result<(), std::io::Error> {
         disable_raw_mode()?;
         stdout().queue(MoveTo(0, 0))?;
-        Ok(())
+        stdout().flush()
     }
 
     fn clear_screen() -> Result<(), std::io::Error> {
         let mut stdout = io::stdout();
         stdout.queue(Clear(ClearType::All))?;
-        Ok(())
+        stdout.flush()
     }
 
-    fn repl(&mut self) -> Result<(), io::Error> {
+    async fn repl(&mut self) -> Result<(), io::Error> {
         let mut input = String::new();
 
         loop {
@@ -59,14 +61,25 @@ impl Terminal {
                 if let Event::Key(event) = event::read()? {
                     match event.code {
                         KeyCode::Char(c) => {
-                            // Print the character and append it to the input string
+                            if self.is_command {
+                                input.push(c);
+                            }
+                            if c == ':' {
+                                let (_, height) = terminal::size()?;
+                                stdout().queue(MoveTo(0, height - 1))?;
+                                self.is_command = true;
+                            }
                             stdout().queue(style::PrintStyledContent(c.to_string().white()))?;
                             io::stdout().flush()?;
-                            input.push(c);
+                            // // Print the character and append it to the input string
+                            // stdout().queue(style::PrintStyledContent(c.to_string().white()))?;
+                            // io::stdout().flush()?;
+                            // input.push(c);
                         }
                         KeyCode::Enter => {
                             // User pressed Enter, break the loop
-                            self.evaluate(&input)?;
+                            self.evaluate(&input).await?;
+                            self.is_command = false;
                             input.clear();
                         }
                         KeyCode::Backspace => {
@@ -80,6 +93,8 @@ impl Terminal {
                                     .queue(crossterm::style::Print(" "))?
                                     .queue(crossterm::cursor::MoveLeft(1))?;
                                 io::stdout().flush()?;
+                            } else {
+                                self.is_command = false;
                             }
                         }
                         _ => {}
@@ -95,53 +110,57 @@ impl Terminal {
         Ok(())
     }
 
-    fn evaluate(&mut self, buffer: &str) -> Result<(), io::Error> {
+    async fn evaluate(&mut self, buffer: &str) -> Result<(), io::Error> {
         let mut stdout = io::stdout();
-        stdout.queue(style::Print("\r\n"))?;
+        // stdout.queue(style::Print("\r\n"))?;
 
         let command = match Command::try_from(buffer) {
             Ok(command) => command,
             Err(e) => {
-                stdout.queue(style::PrintStyledContent(format!("Error: {e}. ").red()))?;
-                stdout.queue(style::Print("\r\n"))?;
-                stdout.queue(style::PrintStyledContent(
-                    "Type 'help' (or <?>) for usage.".yellow(),
-                ))?;
-                stdout.queue(style::Print("\r\n"))?;
-                Self::print_prompt()?;
+                stdout
+                    .queue(Clear(ClearType::CurrentLine))?
+                    .queue(MoveTo(0, self.last_line))?
+                    .queue(style::PrintStyledContent("> ".blue()))?
+                    .queue(style::Print(buffer))?
+                    .queue(style::Print("\r\n"))?
+                    .queue(style::PrintStyledContent(format!("Error: {e}. ").red()))?
+                    .queue(style::Print("\r\n"))?
+                    .queue(style::PrintStyledContent(
+                        "Type ':help' (or <:?>) for usage.".yellow(),
+                    ))?
+                    .queue(style::Print("\r\n"))?;
                 return io::stdout().flush();
             }
         };
 
+        stdout
+            .queue(MoveTo(0, self.last_line))?
+            .queue(Clear(ClearType::All))?
+            .queue(MoveTo(0, 0))?
+            .queue(style::PrintStyledContent("> ".blue()))?
+            .queue(style::Print(buffer))?
+            .queue(style::Print("\r\n"))?;
+
         match command {
             Command::Top(count) => {
-                let stories = fetch_top_stories(count).unwrap();
-                let (width, _) = terminal::size().unwrap();
-                let (_, mut height) = cursor::position().unwrap();
-                let new_cursor_pos = width as usize / 2 - (MAX_TITLE_WIDTH / 2);
-                stdout.queue(MoveTo(new_cursor_pos as u16, height))?;
-                for story in stories {
-                    stdout.queue(style::PrintStyledContent(story.title.unwrap().yellow()))?;
-                    height += 1;
-                    stdout.queue(MoveTo(new_cursor_pos as u16, height))?;
-                    stdout.queue(style::PrintStyledContent(
-                        story.url.unwrap().blue().underlined(),
-                    ))?;
-                    height += 2;
-                    stdout.queue(MoveTo(new_cursor_pos as u16, height))?;
-                }
+                let stories = fetch_best(count).await.unwrap();
+                self.show_stories(&stories).await.unwrap();
             }
             Command::New(count) => {
-                stdout.queue(style::Print(format!("Printing new {count}")))?;
+                let stories = fetch_new(count).await.unwrap();
+                self.show_stories(&stories).await.unwrap();
             }
-            Command::Show(id) => {
-                stdout.queue(style::Print(format!("Showing item {id}")))?;
+            Command::Show(count) => {
+                let stories = fetch_show(count).await.unwrap();
+                self.show_stories(&stories).await.unwrap();
             }
             Command::Ask(count) => {
-                stdout.queue(style::Print(format!("Printing ask {count}")))?;
+                let stories = fetch_ask(count).await.unwrap();
+                self.show_stories(&stories).await.unwrap();
             }
             Command::Jobs(count) => {
-                stdout.queue(style::Print(format!("Printing jobs {count}")))?;
+                let stories = fetch_jobs(count).await.unwrap();
+                self.show_stories(&stories).await.unwrap();
             }
             Command::Help => {
                 stdout.queue(style::Print("Available commands:"))?;
@@ -175,14 +194,7 @@ impl Terminal {
             }
         }
 
-        stdout.queue(style::Print("\r\n"))?;
-        Self::print_prompt()?;
         io::stdout().flush()
-    }
-
-    fn print_prompt() -> Result<(), io::Error> {
-        io::stdout().queue(style::PrintStyledContent("> ".blue()))?;
-        Ok(())
     }
 
     fn refresh_screen(&self) -> Result<(), io::Error> {
@@ -192,77 +204,47 @@ impl Terminal {
         }
         Ok(())
     }
-}
 
-enum Command {
-    Top(usize),
-    New(usize),
-    Show(usize),
-    Ask(usize),
-    Jobs(usize),
-    Help,
-    Exit,
-}
-
-impl TryFrom<&str> for Command {
-    type Error = String;
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let (remaining, command) =
-            first_word(value).map_err(|_| format!("Invalid command: {value}"))?;
-        match command {
-            "top" => {
-                let (_, param) =
-                    first_word(remaining).map_err(|_| format!("Invalid command: {value}"))?;
-                match param.parse::<usize>() {
-                    Ok(count) => Ok(Self::Top(count)),
-                    Err(e) => Err(format!("Invalid count: {e}")),
-                }
+    async fn show_stories(&mut self, items: &[Item]) -> Result<(), io::Error> {
+        let mut stdout = io::stdout();
+        let (width, _) = terminal::size().unwrap();
+        let (_, height) = cursor::position().unwrap();
+        let mut new_height = height;
+        let new_cursor_pos = width as usize / 2 - (MAX_TITLE_WIDTH / 2);
+        stdout.queue(MoveTo(new_cursor_pos as u16, new_height))?;
+        for item in items {
+            stdout.queue(style::PrintStyledContent(
+                item.title.clone().unwrap().yellow(),
+            ))?;
+            new_height += 1;
+            stdout.queue(MoveTo(new_cursor_pos as u16, new_height))?;
+            if let Some(url) = &item.url {
+                stdout.queue(style::PrintStyledContent(url.clone().blue().underlined()))?;
+                new_height += 2;
+                stdout.queue(MoveTo(new_cursor_pos as u16, new_height))?;
+            } else if let Some(text) = &item.text {
+                stdout.queue(style::PrintStyledContent(text.clone().green()))?;
+                new_height += 2;
+                stdout.queue(MoveTo(new_cursor_pos as u16, new_height))?;
             }
-            "new" => {
-                let (_, param) =
-                    first_word(remaining).map_err(|_| format!("Invalid command: {value}"))?;
-                match param.parse::<usize>() {
-                    Ok(count) => Ok(Self::New(count)),
-                    Err(e) => Err(format!("Invalid count: {e}")),
-                }
-            }
-            "show" => {
-                let (_, param) =
-                    first_word(remaining).map_err(|_| format!("Invalid command: {value}"))?;
-                match param.parse::<usize>() {
-                    Ok(count) => Ok(Self::Show(count)),
-                    Err(e) => Err(format!("Invalid count: {e}")),
-                }
-            }
-            "ask" => {
-                let (_, param) =
-                    first_word(remaining).map_err(|_| format!("Invalid command: {value}"))?;
-                match param.parse::<usize>() {
-                    Ok(count) => Ok(Self::Ask(count)),
-                    Err(e) => Err(format!("Invalid count: {e}")),
-                }
-            }
-            "jobs" => {
-                let (_, param) =
-                    first_word(remaining).map_err(|_| format!("Invalid command: {value}"))?;
-                match param.parse::<usize>() {
-                    Ok(count) => Ok(Self::Jobs(count)),
-                    Err(e) => Err(format!("Invalid count: {e}")),
-                }
-            }
-            "help" | "?" => Ok(Self::Help),
-            "exit" | "quit" => Ok(Self::Exit),
-            _ => Err(format!("Invalid command: {value}")),
         }
+        stdout.queue(MoveTo(new_cursor_pos as u16, height))?;
+
+        self.last_line = height;
+        Ok(())
     }
-}
 
-fn is_not_whitespace(c: char) -> bool {
-    !c.is_whitespace()
-}
-
-fn first_word(input: &str) -> IResult<&str, &str> {
-    let (input, word) = take_while1(is_not_whitespace)(input)?;
-    let (input, _) = space0(input)?; // consume any trailing spaces (optional)
-    Ok((input, word))
+    fn show_dashboard(&mut self) -> Result<(), io::Error> {
+        let mut stdout = io::stdout();
+        let (width, height) = terminal::size()?;
+        let width = width / 2 - 27 / 2;
+        let height = height / 4;
+        stdout.queue(MoveTo(width, height))?;
+        stdout.queue(style::Print("Welcome to Hacker News CLI!"))?;
+        stdout.queue(MoveTo(width, height + 1))?;
+        stdout.queue(style::Print("Type 'help' (or <?>) for usage.\r\n"))?;
+        stdout.queue(MoveTo(width, height))?;
+        self.is_dashboard_active = true;
+        stdout.flush()
+    }
 }
