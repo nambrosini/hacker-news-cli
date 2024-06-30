@@ -63,13 +63,39 @@ impl Terminal {
                         KeyCode::Char(c) => {
                             if self.is_command {
                                 input.push(c);
+                                stdout().queue(style::PrintStyledContent(c.to_string().white()))?;
                             }
-                            if c == ':' {
-                                let (_, height) = terminal::size()?;
-                                stdout().queue(MoveTo(0, height - 1))?;
-                                self.is_command = true;
+                            let (pos_x, pos_y) = cursor::position()?;
+                            let (width, height) = terminal::size()?;
+                            match c {
+                                ':' => {
+                                    stdout().queue(MoveTo(0, height - 1))?;
+                                    stdout()
+                                        .queue(style::PrintStyledContent(c.to_string().white()))?;
+                                    self.is_command = true;
+                                }
+                                'h' => {
+                                    if pos_x > 0 {
+                                        stdout().queue(MoveTo(pos_x - 1, pos_y))?;
+                                    }
+                                }
+                                'j' => {
+                                    if pos_y < height - 1 {
+                                        stdout().queue(MoveTo(pos_x, pos_y + 1))?;
+                                    }
+                                }
+                                'k' => {
+                                    if pos_y > 0 {
+                                        stdout().queue(MoveTo(pos_x, pos_y - 1))?;
+                                    }
+                                }
+                                'l' => {
+                                    if pos_x < width - 1 {
+                                        stdout().queue(MoveTo(pos_x + 1, pos_y))?;
+                                    }
+                                }
+                                _ => {}
                             }
-                            stdout().queue(style::PrintStyledContent(c.to_string().white()))?;
                             io::stdout().flush()?;
                             // // Print the character and append it to the input string
                             // stdout().queue(style::PrintStyledContent(c.to_string().white()))?;
