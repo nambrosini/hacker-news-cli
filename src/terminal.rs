@@ -10,7 +10,7 @@ use crossterm::{
     QueueableCommand,
 };
 
-use crate::client::{fetch_ask, fetch_best, fetch_jobs, fetch_new, fetch_show, Item};
+use crate::client::{HttpClient, Item};
 
 use crate::terminal::command::Command;
 
@@ -18,6 +18,7 @@ const MAX_TITLE_WIDTH: usize = 120;
 
 #[derive(Default)]
 pub struct Terminal {
+    http_client: HttpClient,
     should_quit: bool,
     is_command: bool,
     last_line: u16,
@@ -169,23 +170,23 @@ impl Terminal {
 
         match command {
             Command::Top(count) => {
-                let stories = fetch_best(count).await.unwrap();
+                let stories = self.http_client.get_top(0..count).await.unwrap();
                 self.show_stories(&stories).await.unwrap();
             }
             Command::New(count) => {
-                let stories = fetch_new(count).await.unwrap();
+                let stories = self.http_client.get_new(0..count).await.unwrap();
                 self.show_stories(&stories).await.unwrap();
             }
             Command::Show(count) => {
-                let stories = fetch_show(count).await.unwrap();
+                let stories = self.http_client.get_show(0..count).await.unwrap();
                 self.show_stories(&stories).await.unwrap();
             }
             Command::Ask(count) => {
-                let stories = fetch_ask(count).await.unwrap();
+                let stories = self.http_client.get_ask(0..count).await.unwrap();
                 self.show_stories(&stories).await.unwrap();
             }
             Command::Jobs(count) => {
-                let stories = fetch_jobs(count).await.unwrap();
+                let stories = self.http_client.get_jobs(0..count).await.unwrap();
                 self.show_stories(&stories).await.unwrap();
             }
             Command::Help => {
